@@ -1,0 +1,4 @@
+base:
+    'scanner-*':
+        - swap
+        - scanner
