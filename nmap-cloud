@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# Check parameters
+if [ ! $1 ]; then
+	echo "Usage: nmap_cloud.sh <target file>"
+	exit 1
+fi
+
+#Check file presense
+if [ ! -f $1 ]; then
+	echo "Critical: target file does not exist."
+	exit 1
+fi
+
+
+# Prepare some handy variables
+num_parallel_targets=32
+
+target_file=$1
+num_targets=$(wc -l $target_file | cut -f 1 -d \ )
+num_scanners=$(($num_targets/$num_parallel_targets)) 	&&
+if [ $(($num_scanners*$num_parallel_targets)) -eq $num_targets ]; then
+	num_scanners=$(($num_scanners-1))
+fi
+echo "Starting parallel Nmap scan of $num_targets hosts."
+
+# Split target file to pieces
+echo -n "  Splitting the target file to pieces... "
+split -l $num_parallel_targets -d $target_file ${target_file}-
+echo "Done."
+#ls
+#echo "Press any key to continue..." && read ok
+
+
+echo -n "  Creating $num_scanners scanner instances... "
+# Create an array of minion names
+declare -a scanner
+for i in $(ls ${target_file}-* | cut -f 2 -d \-); do
+	scanner[10#$i]="scanner-$i"
+done
+#echo ${scanner[@]}
+#echo "Press any key to continue..." && read ok
+
+# Create the scanners
+salt-cloud -l error -P -p ubuntu_512MB_am3 ${scanner[@]}
+#echo "Press any key to continue..." && read ok
+
+# Initiate scanners state
+salt -l error "scanner-*" state.highstate
+#echo "Press any key to continue..." && read ok
+echo "Done."
+
+# Push files to scanners
+echo -n "  Pushing config files to scanners... "
+for i in $(ls ${target_file}-* | cut -f 2 -d \-); do
+	salt-cp -l error "scanner-$i" ${target_file}-${i} /root/hosts.lst
+done
+#echo "Press any key to continue..." && read ok
+echo "Done."
+
+# Commence scanning
+echo "  Commencing parallel execurion of Nmap scans..."
+#salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -sC -p80,81,443,8008,8080,8443,7443,9443,6443,5443 --script=ssl-cert,ssl-date,ssl-known-key,'http-* and discovery and safe' -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
+salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -p- --script=ssl-cert,ssl-date,ssl-known-key,'http-* and discovery and safe' -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
+#echo "Press any key to continue..." && read ok
+echo "Done."
+
+# Check for task completion, retrieve the results, and destroy scanners
+echo "  Starting monitoring for Nmap scans completion with 60 seconds interval..."
+declare -a results
+while salt -l error 'scanner-*' test.ping; do
+	sleep 60
+	for i in $(ls ${target_file}-* | cut -f 2 -d \-); do
+		if salt -l error "scanner-$i" cmd.run 'test -f finished'; then
+			echo "  scanner-$i has finished the job. Retrieving the results... "
+			ip=$(salt -l error "scanner-${i}" mine.get "scanner-${i}" external_ip | tail -1 | sed 's/ //g')
+			rsync -avz -e "ssh -i ~/.ssh/do_auto -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" --progress ${ip}:/root/results.xml results.xml-$i
+			results[10#$i]="results.xml-$i"
+			echo "Done."
+			echo "  Destroying the instance... "
+			salt-cloud -l error -y -d "scanner-$i"
+			echo "Done."
+		fi
+	done
+done
+#echo ${results[@]}
+#echo "Press any key to continue..." && read ok
+echo "  All scans completed, instances destroyed."
+
+# Destroy scanners
+#salt-cloud -l error -P -y -d ${scanner[@]}
+#echo "Press any key to continue..." && read ok
+
+# Process the results
+
+# Using Glens Nmap XML Merger (https://bitbucket.org/memoryresident/gnxtools/src)
+#python /root/nmap/gnxtools/gnxmerge.py -sources=$(echo ${results[@]} | sed 's/ /,/g') > results.xml
+
+# Using dumb concatenation
+echo "  Processing the XML results... "
+head -8 results.xml-00 > results.xml
+cat results.xml-* | grep -v '<!DOCTYPE' | grep -v '<?xml' | grep -v '<!--' | grep -v '<nmaprun' | grep -v '<scaninfo' | grep -v '<verbose' | grep -v '<debugging' | grep -v '<runstats' | grep -v '</runstats>' | grep -v '</nmaprun>' >> results.xml
+tail -3 results.xml-00 >> results.xml
+#echo "Press any key to continue..." && read ok
+echo "Done."
+echo "See results in 'results.xml'."
