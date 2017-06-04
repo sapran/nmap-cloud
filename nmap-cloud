@@ -6,7 +6,7 @@ if [ ! $1 ]; then
 	exit 1
 fi
 
-#Check file presense
+# Check file presense
 if [ ! -f $1 ]; then
 	echo "Critical: target file does not exist."
 	exit 1
@@ -59,7 +59,7 @@ done
 echo "Done."
 
 # Commence scanning
-echo "  Commencing parallel execurion of Nmap scans..."
+echo "  Commencing parallel execution of Nmap scans..."
 #salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -sC -p80,81,443,8008,8080,8443,7443,9443,6443,5443 --script=ssl-cert,ssl-date,ssl-known-key,'http-* and discovery and safe' -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
 salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -p- --script=ssl-cert,ssl-date,ssl-known-key,'http-* and discovery and safe' -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
 #echo "Press any key to continue..." && read ok
