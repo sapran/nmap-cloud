@@ -14,7 +14,7 @@ fi
 
 
 # Prepare some handy variables
-num_parallel_targets=32
+num_parallel_targets=5
 
 target_file=$1
 num_targets=$(wc -l $target_file | cut -f 1 -d \ )
@@ -22,17 +22,17 @@ num_scanners=$(($num_targets/$num_parallel_targets)) 	&&
 if [ $(($num_scanners*$num_parallel_targets)) -eq $num_targets ]; then
 	num_scanners=$(($num_scanners-1))
 fi
-echo "Starting parallel Nmap scan of $num_targets hosts."
+echo "!!! Starting parallel Nmap scan of $num_targets hosts."
 
 # Split target file to pieces
-echo -n "  Splitting the target file to pieces... "
+echo "+++ Splitting the target file to pieces... "
 split -l $num_parallel_targets -d $target_file ${target_file}-
 echo "Done."
 #ls
 #echo "Press any key to continue..." && read ok
 
 
-echo -n "  Creating $num_scanners scanner instances... "
+echo "+++ Creating $((num_scanners+1)) scanner instances... "
 # Create an array of minion names
 declare -a scanner
 for i in $(ls ${target_file}-* | cut -f 2 -d \-); do
@@ -51,7 +51,7 @@ salt -l error "scanner-*" state.highstate
 echo "Done."
 
 # Push files to scanners
-echo -n "  Pushing config files to scanners... "
+echo "+++ Pushing config files to scanners... "
 for i in $(ls ${target_file}-* | cut -f 2 -d \-); do
 	salt-cp -l error "scanner-$i" ${target_file}-${i} /root/hosts.lst
 done
@@ -59,25 +59,26 @@ done
 echo "Done."
 
 # Commence scanning
-echo "  Commencing parallel execution of Nmap scans..."
+echo "+++ Commencing parallel execution of Nmap scans..."
 #salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -sC -p80,81,443,8008,8080,8443,7443,9443,6443,5443 --script=ssl-cert,ssl-date,ssl-known-key,'http-* and discovery and safe' -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
-salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -p- --script=ssl-cert,ssl-date,ssl-known-key,'http-* and discovery and safe' -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
+salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -p80,443 -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
+#salt -l error "scanner-*" cmd.run "docker run -v /root/:/root/ --rm instrumentisto/nmap --script=resolveall --script-args=newtargets --min-hostgroup $num_parallel_targets -T4 -A -p- --script=ssl-cert,ssl-date,ssl-known-key,'http-* and discovery and safe' -iL /root/hosts.lst -oX /root/results.xml && echo finished > finished" &
 #echo "Press any key to continue..." && read ok
 echo "Done."
 
 # Check for task completion, retrieve the results, and destroy scanners
-echo "  Starting monitoring for Nmap scans completion with 60 seconds interval..."
+echo "+++ Starting monitoring for Nmap scans completion with 60 seconds interval..."
 declare -a results
 while salt -l error 'scanner-*' test.ping; do
 	sleep 60
 	for i in $(ls ${target_file}-* | cut -f 2 -d \-); do
 		if salt -l error "scanner-$i" cmd.run 'test -f finished'; then
-			echo "  scanner-$i has finished the job. Retrieving the results... "
+			echo "+++ scanner-$i has finished the job. Retrieving the results... "
 			ip=$(salt -l error "scanner-${i}" mine.get "scanner-${i}" external_ip | tail -1 | sed 's/ //g')
 			rsync -avz -e "ssh -i ~/.ssh/do_auto -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" --progress ${ip}:/root/results.xml results.xml-$i
 			results[10#$i]="results.xml-$i"
 			echo "Done."
-			echo "  Destroying the instance... "
+			echo "+++ Destroying the instance... "
 			salt-cloud -l error -y -d "scanner-$i"
 			echo "Done."
 		fi
@@ -85,7 +86,7 @@ while salt -l error 'scanner-*' test.ping; do
 done
 #echo ${results[@]}
 #echo "Press any key to continue..." && read ok
-echo "  All scans completed, instances destroyed."
+echo "+++ All scans completed, instances destroyed."
 
 # Destroy scanners
 #salt-cloud -l error -P -y -d ${scanner[@]}
@@ -97,10 +98,10 @@ echo "  All scans completed, instances destroyed."
 #python /root/nmap/gnxtools/gnxmerge.py -sources=$(echo ${results[@]} | sed 's/ /,/g') > results.xml
 
 # Using dumb concatenation
-echo "  Processing the XML results... "
+echo "+++ Processing the XML results... "
 head -8 results.xml-00 > results.xml
 cat results.xml-* | grep -v '<!DOCTYPE' | grep -v '<?xml' | grep -v '<!--' | grep -v '<nmaprun' | grep -v '<scaninfo' | grep -v '<verbose' | grep -v '<debugging' | grep -v '<runstats' | grep -v '</runstats>' | grep -v '</nmaprun>' >> results.xml
 tail -3 results.xml-00 >> results.xml
 #echo "Press any key to continue..." && read ok
 echo "Done."
-echo "See results in 'results.xml'."
+echo "!!! See results in 'results.xml'."
